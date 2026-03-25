@@ -1,0 +1,299 @@
+/* ─────────────────────────────────────────
+   PRE-CHAT FORM — SKY BLUE & WHITE THEME
+───────────────────────────────────────── */
+
+.prechat-container {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 1.5rem 1.25rem;
+    background: #ffffff;
+    /* Pure white background */
+    overflow: hidden;
+    gap: 0;
+}
+
+/* ── Light Animated Background Orbs ── */
+.prechat-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(60px);
+    opacity: 0.15;
+    /* Subtler for light mode */
+    pointer-events: none;
+    animation: orbFloat 8s ease-in-out infinite;
+}
+
+.prechat-orb-1 {
+    width: 160px;
+    height: 160px;
+    background: #38bdf8;
+    /* Sky Blue */
+    top: -40px;
+    right: -30px;
+    animation-delay: 0s;
+}
+
+.prechat-orb-2 {
+    width: 120px;
+    height: 120px;
+    background: #0ea5e9;
+    /* Light Blue */
+    bottom: 60px;
+    left: -30px;
+    animation-delay: -3s;
+}
+
+.prechat-orb-3 {
+    width: 90px;
+    height: 90px;
+    background: #bae6fd;
+    /* Very Light Blue */
+    top: 50%;
+    right: -20px;
+    animation-delay: -5s;
+}
+
+@keyframes orbFloat {
+
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1);
+    }
+
+    25% {
+        transform: translate(10px, -15px) scale(1.08);
+    }
+
+    50% {
+        transform: translate(-8px, 10px) scale(0.95);
+    }
+
+    75% {
+        transform: translate(5px, 8px) scale(1.04);
+    }
+}
+
+/* ── Header ── */
+.prechat-header {
+    text-align: center;
+    margin-bottom: 1.5rem;
+    position: relative;
+    z-index: 1;
+}
+
+.prechat-logo-ring {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 0.85rem;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+    padding: 3px;
+    animation: ringPulse 3s ease-in-out infinite;
+}
+
+.prechat-logo-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #0ea5e9;
+}
+
+@keyframes ringPulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.2);
+    }
+
+    50% {
+        box-shadow: 0 0 0 8px rgba(14, 165, 233, 0);
+    }
+}
+
+.prechat-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0 0 0.35rem;
+    letter-spacing: -0.01em;
+}
+
+.prechat-brand {
+    background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+    -webkit-background-clip: text;
+    -webkit-fill-color: transparent;
+    /* standard prop */
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.prechat-subtitle {
+    font-size: 0.78rem;
+    color: #64748b;
+    margin: 0;
+    line-height: 1.4;
+}
+
+/* ── Form ── */
+.prechat-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    position: relative;
+    z-index: 1;
+}
+
+/* ── Field ── */
+.prechat-field {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.7rem 0.85rem;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    transition: all 0.25s;
+    position: relative;
+}
+
+.prechat-field.focused {
+    background: #ffffff;
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1), 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.prechat-field.error {
+    border-color: #ef4444;
+    background: #fffafa;
+}
+
+.prechat-field-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: #eff6ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #0ea5e9;
+    flex-shrink: 0;
+    margin-top: 2px;
+    transition: all 0.2s;
+}
+
+.prechat-field.focused .prechat-field-icon {
+    background: #0ea5e9;
+    color: white;
+}
+
+.prechat-field.error .prechat-field-icon {
+    background: #fee2e2;
+    color: #ef4444;
+}
+
+.prechat-field-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.prechat-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.prechat-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #1e293b;
+    font-size: 0.88rem;
+    padding: 0;
+    width: 100%;
+    font-family: inherit;
+}
+
+.prechat-input::placeholder {
+    color: #94a3b8;
+}
+
+.prechat-error {
+    position: absolute;
+    bottom: -16px;
+    left: 0.85rem;
+    font-size: 0.65rem;
+    color: #ef4444;
+    font-weight: 500;
+}
+
+/* ── Submit Button ── */
+.prechat-submit {
+    margin-top: 0.85rem;
+    padding: 0.75rem 1.25rem;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all 0.2s;
+    box-shadow: 0 4px 20px rgba(14, 165, 233, 0.2), 0 0 0 0 rgba(0, 0, 0, 0);
+    position: relative;
+    overflow: hidden;
+}
+
+.prechat-submit::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), transparent);
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.prechat-submit:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 28px rgba(14, 165, 233, 0.3), 0 0 0 4px rgba(14, 165, 233, 0.1);
+    filter: brightness(1.05);
+}
+
+.prechat-submit:hover:not(:disabled)::before {
+    opacity: 1;
+}
+
+.prechat-submit:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.prechat-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* ── Footer ── */
+.prechat-footer {
+    text-align: center;
+    font-size: 0.68rem;
+    color: #94a3b8;
+    margin: auto 0 0;
+    padding-top: 1rem;
+    position: relative;
+    z-index: 1;
+}

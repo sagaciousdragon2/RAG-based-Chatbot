@@ -1,0 +1,116 @@
+.keyword-highlight {
+    background: linear-gradient(135deg, rgba(58, 143, 207, 0.15), rgba(106, 180, 232, 0.15));
+    color: #1a6fa8;
+    border-bottom: 2px dashed #3a8fcf;
+    border-radius: 2px;
+    cursor: pointer;
+    padding: 0 2px;
+    transition: background 0.18s, color 0.18s;
+    font-style: normal;
+    font-weight: 500;
+}
+
+.keyword-highlight:hover {
+    background: linear-gradient(135deg, rgba(58, 143, 207, 0.28), rgba(106, 180, 232, 0.28));
+    color: #0e5a8a;
+}
+
+/* Dark overlay behind popup */
+.keyword-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: rgba(30, 60, 90, 0.15);
+    backdrop-filter: blur(1px);
+}
+
+/* Popup card */
+.keyword-popup {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1000;
+    width: min(420px, 90vw);
+    background: white;
+    border: 1px solid rgba(58, 143, 207, 0.3);
+    border-radius: 1rem;
+    box-shadow: 0 16px 48px rgba(58, 143, 207, 0.22), 0 4px 16px rgba(0, 0, 0, 0.08);
+    animation: popupFadeIn 0.22s ease-out;
+    overflow: hidden;
+}
+
+@keyframes popupFadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -48%) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
+.keyword-popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem 0.75rem;
+    background: linear-gradient(135deg, #3a8fcf, #6ab4e8);
+}
+
+.keyword-popup-header h3 {
+    margin: 0;
+    color: white;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.keyword-popup-close {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.18s;
+    flex-shrink: 0;
+}
+
+.keyword-popup-close:hover {
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.keyword-popup-content {
+    padding: 1rem 1.25rem 0.75rem;
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.65;
+    color: #2d3748;
+}
+
+.keyword-popup-footer {
+    padding: 0.75rem 1.25rem;
+    border-top: 1px solid rgba(58, 143, 207, 0.15);
+    background: #f0f8ff;
+}
+
+.keyword-popup-footer a {
+    color: #3a8fcf;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: color 0.18s;
+}
+
+.keyword-popup-footer a:hover {
+    color: #1a6fa8;
+    text-decoration: underline;
+}

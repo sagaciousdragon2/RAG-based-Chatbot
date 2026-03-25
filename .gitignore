@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Node modules
+node_modules/
+**/node_modules/
+
+# Environment variables
+.env
+*.local
+
+# Build directories
+dist/
+dist-ssr/
+build/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Media files that should likely not be in git
+*.mp3
+*.wav
+*.zip
+
+# Python & Backend specific
+__pycache__/
+chroma_db/
+backendpiper/
+piper/
+voices/
