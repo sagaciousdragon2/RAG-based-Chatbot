@@ -2,6 +2,7 @@ import io
 import csv
 import uuid
 import logging
+import bcrypt
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -28,15 +29,21 @@ mongo_client = MongoClient(mongo_uri)
 db = mongo_client[db_name]
 leads_collection = db["leads"]
 messages_collection = db["chat_messages"]
+agents_collection = db["agents"]
+chat_requests_collection = db["chat_requests"]
+bookings_collection = db["bookings"]
 
 # ── Agent Management ──
 # In-memory agent tracking (production would use Redis / DB)
 active_agents = {}  # agent_id -> { name, available, current_sessions: [] }
+online_agents = {}  # email -> { name, email, connected_at }
 
 # Track active WebSocket connections per session (chat)
 ws_connections: dict[str, list[WebSocket]] = {}
 # Track dashboard WebSocket connections for real-time notifications
 dashboard_ws_connections: list[WebSocket] = []
+# Track dashboard WS connections with agent identity
+agent_ws_map: dict[str, WebSocket] = {}  # email -> WebSocket
 
 
 def setup_indexes():
@@ -51,6 +58,17 @@ def setup_indexes():
         # Messages indexes
         messages_collection.create_index([("session_id", ASCENDING), ("timestamp", ASCENDING)])
         messages_collection.create_index([("session_id", ASCENDING), ("role", ASCENDING)])
+
+        # Agents indexes
+        agents_collection.create_index([("email", ASCENDING)], unique=True)
+
+        # Chat requests indexes
+        chat_requests_collection.create_index([("session_id", ASCENDING)])
+        chat_requests_collection.create_index([("status", ASCENDING)])
+
+        # Bookings indexes
+        bookings_collection.create_index([("session_id", ASCENDING)])
+        bookings_collection.create_index([("date", ASCENDING)])
 
         logger.info("MongoDB indexes created successfully")
     except Exception as e:
@@ -71,7 +89,11 @@ app = FastAPI(title="Smartchat", version="2.1.0", lifespan=lifespan)
 # Allow CORS for frontend on Netlify (and any other origin)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://smartchat-walkout-8b01d5.netlify.app",
+        "http://localhost:5173",
+        "*"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -152,6 +174,60 @@ class EndSessionRequest(BaseModel):
     agent_name: str
 
 
+class AgentSignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("Name is required")
+        return v.strip()
+
+    @field_validator("email")
+    @classmethod
+    def email_valid(cls, v):
+        import re
+        if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", v.strip()):
+            raise ValueError("Invalid email format")
+        return v.strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def password_valid(cls, v):
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
+
+
+class AgentLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ChatRequestModel(BaseModel):
+    session_id: str
+    user_name: str | None = None
+
+
+class AcceptChatRequest(BaseModel):
+    request_id: str
+    agent_name: str
+    agent_email: str
+    session_id: str
+
+
+class BookingRequest(BaseModel):
+    session_id: str
+    date: str  # dd-mm-yyyy
+    time: str  # HH:MM
+    user_name: str | None = None
+    user_email: str | None = None
+    user_phone: str | None = None
+
+
 # ── Helper: Broadcast ──
 
 async def broadcast_to_session(session_id: str, data: dict):
@@ -194,6 +270,233 @@ def seed_database():
     except UnicodeEncodeError:
         return {"status": "success", "message": "Database seeded with Walkout Tech data (unicode print warning suppressed)"}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Agent Auth ──
+
+@app.post("/api/agent/signup")
+def agent_signup(request: AgentSignupRequest):
+    """Register a new sales agent."""
+    try:
+        existing = agents_collection.find_one({"email": request.email})
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        hashed = bcrypt.hashpw(request.password.encode("utf-8"), bcrypt.gensalt())
+        agent = {
+            "name": request.name,
+            "email": request.email,
+            "password_hash": hashed.decode("utf-8"),
+            "created_at": datetime.now(timezone.utc),
+        }
+        agents_collection.insert_one(agent)
+        logger.info(f"[Agent] New agent registered: {request.name} ({request.email})")
+        return {"message": "Agent registered successfully", "name": request.name, "email": request.email}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Agent Signup] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/login")
+def agent_login(request: AgentLoginRequest):
+    """Authenticate a sales agent."""
+    try:
+        agent = agents_collection.find_one({"email": request.email.strip().lower()})
+        if not agent:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        if not bcrypt.checkpw(request.password.encode("utf-8"), agent["password_hash"].encode("utf-8")):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        # Mark agent as online
+        online_agents[agent["email"]] = {
+            "name": agent["name"],
+            "email": agent["email"],
+            "connected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        logger.info(f"[Agent] Login: {agent['name']} ({agent['email']})")
+        return {"message": "Login successful", "name": agent["name"], "email": agent["email"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Agent Login] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/logout")
+def agent_logout(email: str):
+    """Mark agent as offline."""
+    if email in online_agents:
+        del online_agents[email]
+    return {"message": "Logged out"}
+
+
+@app.get("/api/agents/online")
+def get_online_agents():
+    """Check how many agents are currently online."""
+    return {
+        "agents_online": len(online_agents) > 0,
+        "count": len(online_agents),
+        "agents": list(online_agents.values()),
+    }
+
+
+# ── Chat Request / Accept Flow ──
+
+@app.post("/api/agent/request-chat")
+async def request_chat(request: ChatRequestModel):
+    """User requests to talk to a live agent."""
+    try:
+        # Check if agents are online
+        if len(online_agents) == 0:
+            return {"status": "no_agents", "message": "No agents are currently online"}
+        # Check if there's already a pending request for this session
+        existing = chat_requests_collection.find_one({
+            "session_id": request.session_id,
+            "status": "pending"
+        })
+        if existing:
+            return {"status": "already_pending", "message": "Request already pending"}
+        req_id = str(uuid.uuid4())[:12]
+        chat_req = {
+            "request_id": req_id,
+            "session_id": request.session_id,
+            "user_name": request.user_name,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc),
+        }
+        chat_requests_collection.insert_one(chat_req)
+        # Notify all dashboard clients about the new request
+        await broadcast_to_dashboard({
+            "type": "chat_request",
+            "request_id": req_id,
+            "session_id": request.session_id,
+            "user_name": request.user_name,
+        })
+        logger.info(f"[ChatRequest] New request from session {request.session_id}")
+        return {"status": "pending", "request_id": req_id, "message": "Request sent to agents"}
+    except Exception as e:
+        logger.error(f"[ChatRequest] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/accept-chat")
+async def accept_chat(request: AcceptChatRequest):
+    """Agent accepts a pending chat request."""
+    try:
+        chat_req = chat_requests_collection.find_one({
+            "request_id": request.request_id,
+            "status": "pending"
+        })
+        if not chat_req:
+            raise HTTPException(status_code=404, detail="Request not found or already handled")
+        # Update request status
+        chat_requests_collection.update_one(
+            {"request_id": request.request_id},
+            {"$set": {"status": "accepted", "accepted_by": request.agent_name}}
+        )
+        # Do the agent takeover
+        leads_collection.update_one(
+            {"session_id": request.session_id},
+            {"$set": {"assigned_agent": request.agent_name, "status": "assigned"}}
+        )
+        # Store system message
+        messages_collection.insert_one({
+            "session_id": request.session_id,
+            "role": "system",
+            "content": f"Agent {request.agent_name} has joined the chat.",
+            "timestamp": datetime.now(timezone.utc),
+        })
+        # Notify user via WebSocket
+        await broadcast_to_session(request.session_id, {
+            "type": "agent_joined",
+            "agent_name": request.agent_name,
+            "message": f"Agent {request.agent_name} has joined the chat."
+        })
+        # Notify dashboard
+        await broadcast_to_dashboard({
+            "type": "request_accepted",
+            "request_id": request.request_id,
+            "session_id": request.session_id,
+            "agent_name": request.agent_name,
+        })
+        logger.info(f"[ChatRequest] Accepted by {request.agent_name} for session {request.session_id}")
+        return {"message": f"Chat accepted by {request.agent_name}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ChatRequest] Accept error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent/pending-requests")
+def get_pending_requests():
+    """Get all pending chat requests for the dashboard."""
+    try:
+        requests = list(chat_requests_collection.find(
+            {"status": "pending"},
+            {"_id": 0}
+        ).sort("created_at", -1))
+        for req in requests:
+            if isinstance(req.get("created_at"), datetime):
+                req["created_at"] = req["created_at"].isoformat()
+            # Get lead info
+            lead = leads_collection.find_one({"session_id": req["session_id"]}, {"_id": 0, "name": 1, "email": 1})
+            if lead:
+                req["user_name"] = lead.get("name", req.get("user_name", "Unknown"))
+                req["user_email"] = lead.get("email", "")
+        return {"requests": requests}
+    except Exception as e:
+        logger.error(f"[ChatRequest] Fetch error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Bookings ──
+
+@app.post("/api/bookings")
+async def create_booking(request: BookingRequest):
+    """Create a new consultation booking."""
+    try:
+        booking_id = str(uuid.uuid4())[:12]
+        booking = {
+            "booking_id": booking_id,
+            "session_id": request.session_id,
+            "date": request.date,
+            "time": request.time,
+            "user_name": request.user_name,
+            "user_email": request.user_email,
+            "user_phone": request.user_phone,
+            "status": "scheduled",
+            "created_at": datetime.now(timezone.utc),
+        }
+        bookings_collection.insert_one(booking)
+        
+        # Notify dashboard
+        await broadcast_to_dashboard({
+            "type": "new_booking",
+            "booking": {
+                **booking,
+                "created_at": booking["created_at"].isoformat()
+            }
+        })
+        
+        logger.info(f"[Booking] New booking created: {booking_id} for {request.date} at {request.time}")
+        return {"status": "success", "booking_id": booking_id, "message": "Booking confirmed"}
+    except Exception as e:
+        logger.error(f"[Booking] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/bookings")
+def get_bookings():
+    """Get all consultation bookings."""
+    try:
+        bookings = list(bookings_collection.find({}, {"_id": 0}).sort("date", ASCENDING))
+        for b in bookings:
+            if isinstance(b.get("created_at"), datetime):
+                b["created_at"] = b["created_at"].isoformat()
+        return {"bookings": bookings}
+    except Exception as e:
+        logger.error(f"[Booking] Fetch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -302,19 +605,14 @@ async def chat_endpoint(request: ChatRequest):
 
 
 @app.post("/speak")
-def speak_endpoint(request: ChatRequest):
+async def speak_endpoint(request: ChatRequest):
     try:
-        audio_bytes = tts_engine.speak(request.message)
-        if audio_bytes[:3] == b'ID3':
-            media_type = "audio/mpeg"
-        else:
-            media_type = "audio/wav"
         return StreamingResponse(
-            io.BytesIO(audio_bytes),
-            media_type=media_type,
-            headers={"Content-Type": media_type}
+            tts_engine.stream_audio(request.message),
+            media_type="audio/mpeg"
         )
     except Exception as e:
+        logger.error(f"[TTS] Endpoint error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -376,6 +674,40 @@ async def update_lead_status(session_id: str, update: LeadStatusUpdate):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/lead/{session_id}")
+async def delete_lead(session_id: str):
+    """Delete a lead and all associated messages, requests, and bookings."""
+    try:
+        # 1. Delete messages
+        messages_collection.delete_many({"session_id": session_id})
+        
+        # 2. Delete chat requests
+        chat_requests_collection.delete_many({"session_id": session_id})
+        
+        # 3. Delete bookings
+        bookings_collection.delete_many({"session_id": session_id})
+        
+        # 4. Delete lead
+        result = leads_collection.delete_one({"session_id": session_id})
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        # 5. Notify dashboard
+        await broadcast_to_dashboard({
+            "type": "lead_deleted",
+            "session_id": session_id,
+        })
+
+        logger.info(f"[Lead] Deleted session {session_id}")
+        return {"message": "Lead and associated data deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Lead] Delete error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

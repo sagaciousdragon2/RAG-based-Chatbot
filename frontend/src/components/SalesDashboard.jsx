@@ -1,20 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import {
-    Users, Search, RefreshCcw, ChevronDown, Clock, UserCheck, XCircle,
-    MessageSquare, Mail, Phone, ArrowLeft, Bell, Send, Headphones, ExternalLink,
-    Download, LogOut, Volume2, VolumeX, Hash, Globe, User
-} from 'lucide-react';
+import { Bell, Send, LogOut, MessageCircle, CheckCircle, Calendar, Archive, Tag } from 'lucide-react';
 import './SalesDashboard.css';
 
 const API_URL = import.meta.env.VITE_API_URL ?? '';
 axios.defaults.headers.common['ngrok-skip-browser-warning'] = 'true';
-
-const STATUS_CONFIG = {
-    new: { label: 'New', color: '#3b82f6', bg: '#eff6ff', icon: Clock },
-    assigned: { label: 'Assigned', color: '#f59e0b', bg: '#fffbeb', icon: UserCheck },
-    closed: { label: 'Closed', color: '#10b981', bg: '#ecfdf5', icon: XCircle },
-};
 
 // Simple notification sound using Web Audio API
 const playNotificationSound = () => {
@@ -44,24 +34,25 @@ const playNotificationSound = () => {
     }
 };
 
-const SalesDashboard = ({ onBack }) => {
+const SalesDashboard = ({ agentInfo, onLogout }) => {
     const [leads, setLeads] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [search, setSearch] = useState('');
-    const [statusFilter, setStatusFilter] = useState('all');
-    const [newCount, setNewCount] = useState(0);
-    const [expandedLead, setExpandedLead] = useState(null);
+    const [selectedLead, setSelectedLead] = useState(null);
     const [chatHistory, setChatHistory] = useState([]);
     const [chatLoading, setChatLoading] = useState(false);
     const [agentMessage, setAgentMessage] = useState('');
-    const [agentName, setAgentName] = useState('');
-    const [showAgentInput, setShowAgentInput] = useState(false);
-    const [soundEnabled, setSoundEnabled] = useState(true);
-    const [liveIndicator, setLiveIndicator] = useState(false);
+    const [pendingRequests, setPendingRequests] = useState([]);
+    const [bookings, setBookings] = useState([]);
+    const [newCount, setNewCount] = useState(0);
     const [wsConnected, setWsConnected] = useState(false);
-    const pollRef = useRef(null);
+    const [editingLabel, setEditingLabel] = useState(null);
+    const [labelInput, setLabelInput] = useState('');
+    const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, lead: null });
     const wsRef = useRef(null);
     const chatEndRef = useRef(null);
+    const pollRef = useRef(null);
+
+    const agentName = agentInfo?.name || 'Agent';
+    const agentEmail = agentInfo?.email || '';
 
     const fetchLeads = useCallback(async () => {
         try {
@@ -69,8 +60,15 @@ const SalesDashboard = ({ onBack }) => {
             setLeads(res.data.leads || []);
         } catch (err) {
             console.error('[Dashboard] Error fetching leads:', err);
-        } finally {
-            setLoading(false);
+        }
+    }, []);
+
+    const fetchPendingRequests = useCallback(async () => {
+        try {
+            const res = await axios.get(`${API_URL}/api/agent/pending-requests`);
+            setPendingRequests(res.data.requests || []);
+        } catch (err) {
+            console.error('[Dashboard] Error fetching requests:', err);
         }
     }, []);
 
@@ -81,7 +79,16 @@ const SalesDashboard = ({ onBack }) => {
         } catch { }
     }, []);
 
-    // WebSocket logic
+    const fetchBookings = useCallback(async () => {
+        try {
+            const res = await axios.get(`${API_URL}/api/bookings`);
+            setBookings(res.data.bookings || []);
+        } catch (err) {
+            console.error('[Dashboard] Error fetching bookings:', err);
+        }
+    }, []);
+
+    // WebSocket connection
     useEffect(() => {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = API_URL ? new URL(API_URL).host : window.location.host;
@@ -94,29 +101,56 @@ const SalesDashboard = ({ onBack }) => {
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'new_lead') {
-                    setLiveIndicator(true);
-                    setTimeout(() => setLiveIndicator(false), 3000);
-                    if (soundEnabled) playNotificationSound();
+                    playNotificationSound();
+                    setLeads(prev => {
+                        const filtered = prev.filter(l => l.session_id !== data.lead.session_id);
+                        return [data.lead, ...filtered];
+                    });
+                    setNewCount(prev => prev + 1);
                     if (Notification.permission === 'granted') {
                         new Notification('🔔 New Lead!', {
                             body: `${data.lead.name} - ${data.lead.email}`,
                             icon: '/smartchat-icon.png',
                         });
                     }
-                    setLeads(prev => [data.lead, ...prev]);
-                    setNewCount(prev => prev + 1);
-                } else if (data.type === 'status_changed') {
-                    setLeads(prev => prev.map(l => l.session_id === data.session_id ? { ...l, status: data.status } : l));
-                    fetchNewCount();
+                } else if (data.type === 'chat_request') {
+                    playNotificationSound();
+                    fetchPendingRequests();
+                } else if (data.type === 'new_booking') {
+                    playNotificationSound();
+                    fetchBookings();
+                    if (Notification.permission === 'granted') {
+                        new Notification('📅 New Booking!', {
+                            body: `${data.booking.date} at ${data.booking.time}`,
+                        });
+                    }
+                } else if (data.type === 'request_accepted') {
+                    fetchPendingRequests();
+                    fetchLeads();
                 } else if (data.type === 'new_message') {
                     if (data.role === 'user') {
-                        setLeads(prev => prev.map(l => l.session_id === data.session_id ? { ...l, last_message: data.preview, message_count: (l.message_count || 0) + 1 } : l));
+                        setLeads(prev => prev.map(l => l.session_id === data.session_id
+                            ? { ...l, last_message: data.preview, message_count: (l.message_count || 0) + 1 }
+                            : l));
                     }
-                    if (expandedLead === data.session_id) viewChatSilent(data.session_id);
+                    // Auto-refresh chat if we're viewing this lead
+                    setSelectedLead(current => {
+                        if (current?.session_id === data.session_id) {
+                            viewChatSilent(data.session_id);
+                        }
+                        return current;
+                    });
                 } else if (data.type === 'agent_takeover') {
-                    setLeads(prev => prev.map(l => l.session_id === data.session_id ? { ...l, assigned_agent: data.agent_name, status: 'assigned' } : l));
+                    setLeads(prev => prev.map(l => l.session_id === data.session_id
+                        ? { ...l, assigned_agent: data.agent_name, status: 'assigned' }
+                        : l));
                 } else if (data.type === 'session_ended') {
-                    setLeads(prev => prev.map(l => l.session_id === data.session_id ? { ...l, assigned_agent: null, status: 'closed' } : l));
+                    setLeads(prev => prev.map(l => l.session_id === data.session_id
+                        ? { ...l, assigned_agent: null, status: 'closed' }
+                        : l));
+                } else if (data.type === 'lead_deleted') {
+                    setLeads(prev => prev.filter(l => l.session_id !== data.session_id));
+                    setSelectedLead(current => current?.session_id === data.session_id ? null : current);
                 }
             };
             ws.onclose = () => setWsConnected(false);
@@ -127,33 +161,34 @@ const SalesDashboard = ({ onBack }) => {
         } catch (e) {
             console.error('[Dashboard WS] Error:', e);
         }
-    }, [soundEnabled, expandedLead]);
+    }, []);
 
     useEffect(() => {
         if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
         fetchLeads();
         fetchNewCount();
-        pollRef.current = setInterval(() => { fetchLeads(); fetchNewCount(); }, 30000);
+        fetchPendingRequests();
+        fetchBookings();
+        pollRef.current = setInterval(() => { fetchLeads(); fetchNewCount(); fetchPendingRequests(); fetchBookings(); }, 15000);
         return () => clearInterval(pollRef.current);
-    }, [fetchLeads, fetchNewCount]);
+    }, [fetchLeads, fetchNewCount, fetchPendingRequests, fetchBookings]);
+
+    useEffect(() => {
+        const handleClickOutside = () => setContextMenu({ visible: false, x: 0, y: 0, lead: null });
+        window.addEventListener('click', handleClickOutside);
+        return () => window.removeEventListener('click', handleClickOutside);
+    }, []);
 
     useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatHistory]);
 
-    const updateStatus = async (sessionId, newStatus) => {
-        try {
-            await axios.post(`${API_URL}/api/lead/${sessionId}/status`, { status: newStatus });
-            setLeads(prev => prev.map(l => l.session_id === sessionId ? { ...l, status: newStatus } : l));
-        } catch (err) { console.error(err); }
-    };
-
-    const viewChat = async (sessionId) => {
-        if (expandedLead === sessionId) { setExpandedLead(null); return; }
-        setExpandedLead(sessionId);
+    const selectLead = async (lead) => {
+        setSelectedLead(lead);
         setChatLoading(true);
         try {
-            const res = await axios.get(`${API_URL}/api/chat-history/${sessionId}`);
+            const res = await axios.get(`${API_URL}/api/chat-history/${lead.session_id}`);
             setChatHistory(res.data.messages || []);
-        } catch (err) { setChatHistory([]); } finally { setChatLoading(false); }
+        } catch { setChatHistory([]); }
+        finally { setChatLoading(false); }
     };
 
     const viewChatSilent = async (sessionId) => {
@@ -163,216 +198,342 @@ const SalesDashboard = ({ onBack }) => {
         } catch { }
     };
 
-    const handleAgentTakeover = async (sessionId) => {
-        if (!agentName.trim()) { setShowAgentInput(true); return; }
+    const handleAcceptRequest = async (req) => {
         try {
-            await axios.post(`${API_URL}/api/agent/takeover`, { agent_name: agentName, session_id: sessionId });
+            await axios.post(`${API_URL}/api/agent/accept-chat`, {
+                request_id: req.request_id,
+                agent_name: agentName,
+                agent_email: agentEmail,
+                session_id: req.session_id,
+            });
+            fetchPendingRequests();
             fetchLeads();
+            // Auto-open chat with this lead
+            const res = await axios.get(`${API_URL}/api/leads`);
+            const updatedLeads = res.data.leads || [];
+            setLeads(updatedLeads);
+            const lead = updatedLeads.find(l => l.session_id === req.session_id);
+            if (lead) selectLead(lead);
+        } catch (err) { console.error('[Accept] Error:', err); }
+    };
+
+    const handleTakeover = async (sessionId) => {
+        try {
+            await axios.post(`${API_URL}/api/agent/takeover`, {
+                agent_name: agentName,
+                session_id: sessionId,
+            });
+            fetchLeads();
+            if (selectedLead?.session_id === sessionId) viewChatSilent(sessionId);
         } catch (err) { console.error(err); }
     };
 
     const handleEndSession = async (sessionId) => {
-        if (!agentName.trim()) { setShowAgentInput(true); return; }
         try {
-            await axios.post(`${API_URL}/api/agent/end-session`, { agent_name: agentName, session_id: sessionId });
+            await axios.post(`${API_URL}/api/agent/end-session`, {
+                agent_name: agentName,
+                session_id: sessionId,
+            });
             fetchLeads();
-            if (expandedLead === sessionId) viewChatSilent(sessionId);
+            if (selectedLead?.session_id === sessionId) viewChatSilent(sessionId);
         } catch (err) { console.error(err); }
     };
 
-    const sendAgentMsg = async (sessionId) => {
-        if (!agentMessage.trim()) return;
-        if (!agentName.trim()) { setShowAgentInput(true); return; }
+    const sendAgentMsg = async () => {
+        if (!agentMessage.trim() || !selectedLead) return;
+
+        // Auto-takeover if not assigned yet
+        if (!selectedLead.assigned_agent) {
+            await handleTakeover(selectedLead.session_id);
+        }
+
         try {
-            await axios.post(`${API_URL}/api/agent/message`, { session_id: sessionId, agent_name: agentName, message: agentMessage });
+            await axios.post(`${API_URL}/api/agent/message`, {
+                session_id: selectedLead.session_id,
+                agent_name: agentName,
+                message: agentMessage,
+            });
             setAgentMessage('');
-            viewChatSilent(sessionId);
+            viewChatSilent(selectedLead.session_id);
         } catch (err) { console.error(err); }
     };
 
-    const handleExport = async () => {
+    const handleLogout = async () => {
         try {
-            const res = await axios.get(`${API_URL}/api/leads/export`, { responseType: 'blob' });
-            const url = window.URL.createObjectURL(new Blob([res.data]));
-            const link = document.createElement('a');
-            link.href = url;
-            link.setAttribute('download', `leads_export_${new Date().toISOString().slice(0, 10)}.csv`);
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.URL.revokeObjectURL(url);
-        } catch (err) { console.error(err); }
+            await axios.post(`${API_URL}/api/agent/logout?email=${encodeURIComponent(agentEmail)}`);
+        } catch { }
+        onLogout();
     };
 
-    const filtered = leads.filter(lead => {
-        const matchesSearch = !search || lead.name?.toLowerCase().includes(search.toLowerCase()) || lead.email?.toLowerCase().includes(search.toLowerCase()) || lead.phone?.includes(search);
-        const matchesStatus = statusFilter === 'all' || lead.status === statusFilter;
-        return matchesSearch && matchesStatus;
-    });
-
-    const statusCounts = { all: leads.length, new: leads.filter(l => l.status === 'new').length, assigned: leads.filter(l => l.status === 'assigned').length, closed: leads.filter(l => l.status === 'closed').length };
-    const formatDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
-    const formatTimeAgo = (iso) => {
-        if (!iso) return '';
-        const diff = Math.floor((new Date() - new Date(iso)) / 1000);
-        if (diff < 60) return 'Just now';
-        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-        return `${Math.floor(diff / 86400)}d ago`;
+    const handleLabelUpdate = async (sessionId, label) => {
+        try {
+            await axios.post(`${API_URL}/api/lead/${sessionId}/label`, { label });
+            setLeads(prev => prev.map(l => l.session_id === sessionId ? { ...l, label } : l));
+            setEditingLabel(null);
+            setLabelInput('');
+        } catch (err) { console.error('[Label] Error:', err); }
     };
+
+    const handleContextMenu = (e, lead) => {
+        e.preventDefault();
+        setContextMenu({
+            visible: true,
+            x: e.pageX,
+            y: e.pageY,
+            lead
+        });
+    };
+
+    const handleDeleteChat = async (sessionId) => {
+        if (!window.confirm('Are you sure you want to delete this chat history? This action cannot be undone.')) return;
+        try {
+            await axios.delete(`${API_URL}/api/lead/${sessionId}`);
+            setLeads(prev => prev.filter(l => l.session_id !== sessionId));
+            if (selectedLead?.session_id === sessionId) setSelectedLead(null);
+            setContextMenu({ visible: false, x: 0, y: 0, lead: null });
+        } catch (err) {
+            console.error('[Delete] Error:', err);
+            alert('Failed to delete chat.');
+        }
+    };
+
+    // Active chats: leads with messages (sorted by activity)
+    const activeChats = leads.filter(l => l.status !== 'closed' && l.message_count > 0);
+    // Past chats: closed sessions
+    const pastChats = leads.filter(l => l.status === 'closed' && l.message_count > 0);
 
     return (
-        <div className="dashboard-container">
-            {/* Header */}
-            <div className="dashboard-header">
-                <div className="dashboard-header-left">
-                    <button className="dashboard-back-btn" onClick={onBack} title="Back to Chat">
-                        <ArrowLeft size={18} />
-                    </button>
-                    <div className="dashboard-header-title-group">
-                        <h1 className="dashboard-title">
-                            <Users size={22} />
-                            Sales Dashboard
-                            {wsConnected && <span className={`live-badge ${liveIndicator ? 'pulse' : ''}`}><span className="live-dot" />LIVE</span>}
-                        </h1>
-                        <p className="dashboard-subtitle">{leads.length} total leads · <span className="subtitle-highlight">{statusCounts.new} new</span> · {statusCounts.assigned} active</p>
+        <div className="sd-layout">
+            {/* ── Left Sidebar ── */}
+            <aside className="sd-sidebar">
+                <div className="sd-sidebar-header">
+                    <h2 className="sd-sidebar-title">Sales Dashboard</h2>
+                    <div className="sd-sidebar-bell">
+                        <Bell size={18} />
+                        {(newCount + pendingRequests.length) > 0 && (
+                            <span className="sd-bell-badge">{newCount + pendingRequests.length}</span>
+                        )}
                     </div>
                 </div>
-                <div className="dashboard-header-right">
-                    {newCount > 0 && <div className="dashboard-notification"><Bell size={16} /><span className="notification-badge">{newCount}</span><span className="notification-text">New</span></div>}
-                    <button className={`dashboard-sound-btn ${soundEnabled ? 'active' : ''}`} onClick={() => setSoundEnabled(v => !v)} title={soundEnabled ? 'Mute' : 'Unmute'}>{soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}</button>
-                    <button className="dashboard-export-btn" onClick={handleExport} title="Export CSV"><Download size={16} /><span className="export-label">Export</span></button>
-                    <button className="dashboard-refresh-btn" onClick={() => { setLoading(true); fetchLeads(); }} title="Refresh"><RefreshCcw size={16} className={loading ? 'spin' : ''} /></button>
-                </div>
-            </div>
 
-            {/* Agent Setup Modal Overlay */}
-            {showAgentInput && (
-                <div className="agent-setup-overlay">
-                    <div className="agent-setup-modal">
-                        <div className="agent-setup-header">
-                            <Headphones size={24} />
-                            <h3>Identify Yourself</h3>
-                        </div>
-                        <p>Enter your agent name to start messaging users.</p>
-                        <input
-                            type="text"
-                            placeholder="Your Name (e.g. Alex)"
-                            value={agentName}
-                            onChange={(e) => setAgentName(e.target.value)}
-                            className="agent-setup-input"
-                            autoFocus
-                        />
-                        <div className="agent-setup-footer">
-                            <button className="agent-setup-cancel" onClick={() => setShowAgentInput(false)}>Cancel</button>
-                            <button className="agent-setup-save" onClick={() => agentName.trim() && setShowAgentInput(false)} disabled={!agentName.trim()}>Save & Continue</button>
-                        </div>
+                {/* Pending Requests */}
+                {pendingRequests.length > 0 && (
+                    <div className="sd-pending-section">
+                        <h4 className="sd-section-label">🔔 Incoming Requests</h4>
+                        {pendingRequests.map((req) => (
+                            <div key={req.request_id} className="sd-pending-item">
+                                <div className="sd-pending-info">
+                                    <span className="sd-pending-name">{req.user_name || 'User'}</span>
+                                    <span className="sd-pending-email">{req.user_email || ''}</span>
+                                </div>
+                                <button className="sd-accept-btn" onClick={() => handleAcceptRequest(req)}>
+                                    <CheckCircle size={14} />
+                                    Accept
+                                </button>
+                            </div>
+                        ))}
                     </div>
+                )}
+
+                {/* Bookings Section */}
+                {bookings.length > 0 && (
+                    <div className="sd-pending-section" style={{ background: '#f0fdf4' }}>
+                        <h4 className="sd-section-label" style={{ color: '#166534' }}>📅 Upcoming Bookings</h4>
+                        {bookings.map((booking) => (
+                            <div key={booking.booking_id} className="sd-pending-item">
+                                <div className="sd-pending-info">
+                                    <span className="sd-pending-name">{booking.date} at {booking.time}</span>
+                                    <span className="sd-pending-email">Booked via Smartchat</span>
+                                </div>
+                                <Calendar size={16} color="#16a34a" />
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <h4 className="sd-section-label">Active Chats</h4>
+
+                <div className="sd-chat-list">
+                    {activeChats.length === 0 ? (
+                        <p className="sd-no-chats">No active chats</p>
+                    ) : (
+                        activeChats.map((lead) => (
+                            <div
+                                key={lead.session_id}
+                                className={`sd-chat-item ${selectedLead?.session_id === lead.session_id ? 'active' : ''}`}
+                                onClick={() => selectLead(lead)}
+                            >
+                                <div className="sd-chat-avatar">
+                                    <MessageCircle size={16} />
+                                </div>
+                                <div className="sd-chat-info">
+                                    <span className="sd-chat-name">{lead.name}</span>
+                                    <span className="sd-chat-email">{lead.email}</span>
+                                </div>
+                                <span className={`sd-chat-dot ${lead.status === 'new' ? 'new' : lead.assigned_agent ? 'assigned' : ''}`} />
+                            </div>
+                        ))
+                    )}
+                </div>
+
+                <h4 className="sd-section-label" style={{ marginTop: '8px' }}><Archive size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />Past Chats</h4>
+
+                <div className="sd-chat-list sd-past-chat-list">
+                    {pastChats.length === 0 ? (
+                        <p className="sd-no-chats">No past chats</p>
+                    ) : (
+                        pastChats.map((lead) => (
+                            <div
+                                key={lead.session_id}
+                                className={`sd-chat-item past ${selectedLead?.session_id === lead.session_id ? 'active' : ''}`}
+                                onClick={() => selectLead(lead)}
+                                onContextMenu={(e) => handleContextMenu(e, lead)}
+                            >
+                                <div className="sd-chat-avatar past">
+                                    <MessageCircle size={16} />
+                                </div>
+                                <div className="sd-chat-info">
+                                    <span className="sd-chat-name">{lead.name}</span>
+                                    {lead.label && <span className="sd-chat-label-tag">{lead.label}</span>}
+                                    {!lead.label && <span className="sd-chat-email">{lead.email}</span>}
+                                </div>
+                                <span className="sd-chat-dot closed" />
+                            </div>
+                        ))
+                    )}
+                </div>
+
+                <button className="sd-logout-btn" onClick={handleLogout}>
+                    <LogOut size={16} />
+                    Logout
+                </button>
+            </aside>
+
+            {/* ── Right Chat Panel ── */}
+            <main className="sd-chat-panel">
+                {!selectedLead ? (
+                    <div className="sd-empty-chat">
+                        <MessageCircle size={48} strokeWidth={1} />
+                        <p>Select a chat from the sidebar to start messaging</p>
+                    </div>
+                ) : (
+                    <>
+                        <div className="sd-chat-header">
+                            <div>
+                                <h3>Chat with {selectedLead.name}</h3>
+                                {selectedLead.status === 'closed' && (
+                                    <div className="sd-label-row">
+                                        {editingLabel === selectedLead.session_id ? (
+                                            <form className="sd-label-form" onSubmit={(e) => { e.preventDefault(); handleLabelUpdate(selectedLead.session_id, labelInput); }}>
+                                                <input
+                                                    className="sd-label-input"
+                                                    placeholder="e.g. Follow-up, Interested"
+                                                    value={labelInput}
+                                                    onChange={(e) => setLabelInput(e.target.value)}
+                                                    autoFocus
+                                                />
+                                                <button type="submit" className="sd-label-save-btn">Save</button>
+                                                <button type="button" className="sd-label-cancel-btn" onClick={() => { setEditingLabel(null); setLabelInput(''); }}>Cancel</button>
+                                            </form>
+                                        ) : (
+                                            <button className="sd-label-btn" onClick={() => { setEditingLabel(selectedLead.session_id); setLabelInput(selectedLead.label || ''); }}>
+                                                <Tag size={13} />
+                                                {selectedLead.label || 'Add Label'}
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="sd-chat-header-actions">
+                                {selectedLead.status === 'closed' ? (
+                                    <span className="sd-assigned-tag" style={{ background: '#f3f4f6', color: '#6b7280' }}>Session Closed</span>
+                                ) : !selectedLead.assigned_agent ? (
+                                    <>
+                                        <button className="sd-join-btn" onClick={() => handleTakeover(selectedLead.session_id)}>
+                                            Join Chat
+                                        </button>
+                                        <button className="sd-leave-btn" style={{ marginLeft: '8px' }} onClick={() => handleEndSession(selectedLead.session_id)}>
+                                            End Session
+                                        </button>
+                                    </>
+                                ) : selectedLead.assigned_agent.toLowerCase() === agentName.toLowerCase() ? (
+                                    <button className="sd-leave-btn" onClick={() => handleEndSession(selectedLead.session_id)}>
+                                        End Session
+                                    </button>
+                                ) : (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span className="sd-assigned-tag">Assigned to {selectedLead.assigned_agent}</span>
+                                        <button className="sd-join-btn" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }} onClick={() => handleTakeover(selectedLead.session_id)}>
+                                            Takeover
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="sd-messages">
+                            {chatLoading ? (
+                                <div className="sd-chat-loading">Loading messages...</div>
+                            ) : chatHistory.length === 0 ? (
+                                <div className="sd-chat-loading">No messages yet</div>
+                            ) : (
+                                chatHistory.map((msg, i) => (
+                                    <div key={i} className={`sd-msg ${msg.role}`}>
+                                        <div className="sd-msg-bubble">
+                                            {msg.role === 'agent' && <span className="sd-msg-agent-name">{msg.agent_name}</span>}
+                                            {msg.role === 'system' ? (
+                                                <em>{msg.content}</em>
+                                            ) : (
+                                                <p>{msg.content}</p>
+                                            )}
+                                            <span className="sd-msg-time">
+                                                {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                            </span>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                            <div ref={chatEndRef} />
+                        </div>
+
+                        <div className="sd-input-bar">
+                            <input
+                                type="text"
+                                className="sd-input"
+                                placeholder="Type a message..."
+                                value={agentMessage}
+                                onChange={(e) => setAgentMessage(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && sendAgentMsg()}
+                            />
+                            <button className="sd-send-btn" onClick={sendAgentMsg} disabled={!agentMessage.trim()}>
+                                Send
+                            </button>
+                        </div>
+                    </>
+                )}
+            </main>
+
+            {/* ── Context Menu ── */}
+            {contextMenu.visible && (
+                <div
+                    className="sd-context-menu"
+                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <button
+                        className="sd-context-menu-item delete"
+                        onClick={() => handleDeleteChat(contextMenu.lead.session_id)}
+                    >
+                        Delete Chat
+                    </button>
+                    <button
+                        className="sd-context-menu-item"
+                        onClick={() => setContextMenu({ visible: false, x: 0, y: 0, lead: null })}
+                    >
+                        Cancel
+                    </button>
                 </div>
             )}
-
-            {/* Filters */}
-            <div className="dashboard-filters">
-                <div className="dashboard-search-box">
-                    <Search size={16} />
-                    <input type="text" placeholder="Search leads..." value={search} onChange={(e) => setSearch(e.target.value)} className="dashboard-search-input" />
-                    {search && <button className="search-clear" onClick={() => setSearch('')}><XCircle size={14} /></button>}
-                </div>
-                <div className="dashboard-status-filters">
-                    <button className={`status-filter-btn ${statusFilter === 'all' ? 'active' : ''}`} onClick={() => setStatusFilter('all')}>All <span className="filter-count">{statusCounts.all}</span></button>
-                    {Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
-                        <button key={key} className={`status-filter-btn ${statusFilter === key ? 'active' : ''}`} onClick={() => setStatusFilter(key)} style={statusFilter === key ? { background: cfg.bg, color: cfg.color } : {}}>
-                            {cfg.label} <span className="filter-count">{statusCounts[key]}</span>
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {/* Table */}
-            <div className="dashboard-table-wrapper">
-                {loading ? <div className="dashboard-loading"><div className="dashboard-spinner" /><p>Loading leads...</p></div> : filtered.length === 0 ? <div className="dashboard-empty"><Users size={40} /><p>No leads found</p></div> : (
-                    <table className="dashboard-table">
-                        <thead><tr><th>Name</th><th>Contact</th><th>Last Message</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
-                        <tbody>
-                            {filtered.map((lead) => {
-                                const cfg = STATUS_CONFIG[lead.status] || STATUS_CONFIG.new;
-                                const isExpanded = expandedLead === lead.session_id;
-                                return (
-                                    <React.Fragment key={lead.session_id}>
-                                        <tr className={`dashboard-row ${isExpanded ? 'expanded' : ''} ${lead.status === 'new' ? 'row-new' : ''}`}>
-                                            <td><div className="lead-name-cell"><div className="lead-avatar">{lead.name?.charAt(0)?.toUpperCase()}</div><div className="lead-name-group"><span className="lead-name">{lead.name}</span>{lead.assigned_agent && <span className="lead-agent-tag"><Headphones size={10} /> {lead.assigned_agent}</span>}</div></div></td>
-                                            <td><div className="lead-contact-cell"><a href={`mailto:${lead.email}`} className="lead-contact-item clickable"><Mail size={12} /> {lead.email}</a><a href={`tel:${lead.phone}`} className="lead-contact-item clickable"><Phone size={12} /> {lead.phone}</a></div></td>
-                                            <td><div className="lead-message-cell"><span className="lead-message">{lead.last_message?.substring(0, 60)}</span>{lead.message_count > 0 && <span className="message-count-badge"><Hash size={10} />{lead.message_count}</span>}</div></td>
-                                            <td><div className="status-dropdown-wrapper"><select className="status-select" value={lead.status} onChange={(e) => updateStatus(lead.session_id, e.target.value)} style={{ color: cfg.color, background: cfg.bg, borderColor: cfg.color + '40' }}><option value="new">🔵 New</option><option value="assigned">🟡 Assigned</option><option value="closed">🟢 Closed</option></select></div></td>
-                                            <td><div className="lead-date-cell"><span className="lead-date">{formatDate(lead.created_at)}</span><span className="lead-time-ago">{formatTimeAgo(lead.created_at)}</span></div></td>
-                                            <td>
-                                                <div className="lead-actions">
-                                                    <button className={`lead-action-btn chat-btn ${isExpanded ? 'active' : ''}`} onClick={() => viewChat(lead.session_id)} title="Open Messenger"><MessageSquare size={14} /></button>
-                                                    {!lead.assigned_agent ? (
-                                                        <button className="lead-action-btn takeover-btn" onClick={() => handleAgentTakeover(lead.session_id)} title="Join Chat"><Headphones size={14} /></button>
-                                                    ) : (
-                                                        <button className="lead-action-btn end-btn" onClick={() => handleEndSession(lead.session_id)} title="Leave Chat"><LogOut size={14} /></button>
-                                                    )}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                        {isExpanded && (
-                                            <tr className="chat-history-row">
-                                                <td colSpan="6">
-                                                    <div className="chat-history-panel">
-                                                        <div className="chat-history-messages">
-                                                            {chatHistory.map((msg, i) => (
-                                                                <div key={i} className={`ch-msg ${msg.role}`}>
-                                                                    <div className="ch-msg-content">
-                                                                        {msg.role === 'agent' && <span className="ch-agent-name">{msg.agent_name}</span>}
-                                                                        <p>{msg.content}</p>
-                                                                        <span className="ch-msg-time">{msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ''}</span>
-                                                                    </div>
-                                                                </div>
-                                                            ))}
-                                                            <div ref={chatEndRef} />
-                                                        </div>
-                                                        {/* REAM-TIME MESSAGING INTERFACE */}
-                                                        <div className="agent-reply-bar">
-                                                            <div className="agent-reply-input-wrapper">
-                                                                <input
-                                                                    type="text"
-                                                                    placeholder={agentName ? `Reply as ${agentName}...` : "Click 'Join Chat' or type here to identify yourself..."}
-                                                                    value={agentMessage}
-                                                                    onChange={(e) => setAgentMessage(e.target.value)}
-                                                                    className="agent-reply-input"
-                                                                    onKeyDown={(e) => e.key === 'Enter' && sendAgentMsg(lead.session_id)}
-                                                                    onFocus={() => !agentName && setShowAgentInput(true)}
-                                                                />
-                                                                <button
-                                                                    className="agent-reply-send"
-                                                                    onClick={() => sendAgentMsg(lead.session_id)}
-                                                                    disabled={!agentMessage.trim()}
-                                                                >
-                                                                    <Send size={16} />
-                                                                </button>
-                                                            </div>
-                                                            {!lead.assigned_agent && (
-                                                                <button className="reply-takeover-btn" onClick={() => handleAgentTakeover(lead.session_id)}>
-                                                                    <Headphones size={14} /> Claim this chat
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </React.Fragment>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                )}
-            </div>
-            <div className="dashboard-footer">
-                <span className="footer-stat"><span className="footer-stat-label">Leads:</span> <span className="footer-stat-value">{filtered.length}</span></span>
-                <span className={`footer-ws-status ${wsConnected ? 'connected' : 'disconnected'}`}><Globe size={12} /> {wsConnected ? 'Connected' : 'Offline'}</span>
-            </div>
         </div>
     );
 };

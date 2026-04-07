@@ -284,7 +284,7 @@ class RAGEngine:
         if any(term in user_query_clean for term in sales_intent):
             return "Sure — here’s our sales team.\n\n##CONTACT_CARD##"
 
-        # Booking / consultation requests -> send to sales team directly
+        # Booking / consultation requests -> show booking form
         consultation_intent = [
             "free consultation",
             "book a consultation",
@@ -292,10 +292,11 @@ class RAGEngine:
             "schedule a consultation",
             "consultation",
             "demo",
-            "book a demo"
+            "book a demo",
+            "book a free consultation"
         ]
         if any(term in user_query_clean for term in consultation_intent):
-            return "Connect with our sales team.\n\n##CONTACT_CARD##"
+            return "Awesome! Please select a date and time for your demo:\n\n##BOOKING_FORM##"
         
         # Detect name introduction: "my name is X", "I am X", "call me X", "I'm X"
         import re as _re

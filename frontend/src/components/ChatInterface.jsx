@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { Send, X, Bot, User, MessageCircle, Phone, Globe, Mic, Trash2, Volume2, VolumeX, Headphones } from 'lucide-react';
 import { KeywordText } from './KeywordText';
 import PreChatForm from './PreChatForm';
+import BookingForm from './BookingForm';
 import './ChatInterface.css';
 
 // When VITE_API_URL is not set, use '' so API calls are relative to the
@@ -127,17 +128,19 @@ const ContactCard = () => (
     </div>
 );
 
-// Parse message content: strip tokens and return { text, showContact, showMoreInfo, showContactSales }
+// Parse message content: strip tokens and return { text, showContact, showMoreInfo, showContactSales, showBooking }
 const parseMessage = (content) => {
     const showContact = content.includes('##CONTACT_CARD##');
     const showMoreInfo = content.includes('##MORE_INFO##');
     const showContactSales = content.includes('##CONTACT_SALES##');
+    const showBooking = content.includes('##BOOKING_FORM##');
     const text = content
         .replace(/##CONTACT_CARD##/g, '')
         .replace(/##MORE_INFO##/g, '')
         .replace(/##CONTACT_SALES##/g, '')
+        .replace(/##BOOKING_FORM##/g, '')
         .trim();
-    return { text, showContact, showMoreInfo, showContactSales };
+    return { text, showContact, showMoreInfo, showContactSales, showBooking };
 };
 
 const ChatInterface = () => {
@@ -149,6 +152,8 @@ const ChatInterface = () => {
     const [agentName, setAgentName] = useState(null);
     const [isTyping, setIsTyping] = useState(false);
     const [overflowMode, setOverflowMode] = useState(false);
+    const [agentRequestPending, setAgentRequestPending] = useState(false);
+    const [agentRequestStatus, setAgentRequestStatus] = useState(null); // null | 'pending' | 'no_agents'
     const [messages, setMessages] = useState([
         { role: 'assistant', content: "Hi there! I'm **Smartchat**, your Walkout Tech assistant.\n\nHow can I help you today?" }
     ]);
@@ -466,6 +471,39 @@ const ChatInterface = () => {
     // Keep ref in sync so toggleListening always calls the latest sendMessage
     sendMessageRef.current = sendMessage;
 
+    // Request to talk to a live agent
+    const requestAgent = async () => {
+        if (!sessionId || agentRequestPending) return;
+        setAgentRequestPending(true);
+        try {
+            const res = await axios.post(`${API_URL}/api/agent/request-chat`, {
+                session_id: sessionId,
+            });
+            if (res.data.status === 'no_agents') {
+                setAgentRequestStatus('no_agents');
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: 'No agents are currently online. Please contact us via our other channels. ##CONTACT_CARD##'
+                }]);
+                contactShownRef.current = true;
+            } else if (res.data.status === 'pending' || res.data.status === 'already_pending') {
+                setAgentRequestStatus('pending');
+                setMessages(prev => [...prev, {
+                    role: 'system',
+                    content: '🔔 Your request to talk to an agent has been sent. Please wait while an agent accepts your chat...'
+                }]);
+            }
+        } catch (err) {
+            console.error('[AgentRequest] Error:', err);
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: 'Sorry, we couldn\'t connect you to an agent right now. Please try again. ##CONTACT_CARD##'
+            }]);
+        } finally {
+            setAgentRequestPending(false);
+        }
+    };
+
     const handleSend = (e) => { e.preventDefault(); sendMessage(input); };
     const handleQuickAction = (query) => sendMessage(query);
 
@@ -476,10 +514,11 @@ const ChatInterface = () => {
             { role: 'assistant', content: "Hi there! I'm **Smartchat**, your Walkout Tech assistant.\n\nHow can I help you today?" }
         ]);
         setInput('');
-        contactShownRef.current = false; // Reset so contact card can show again fresh
+        contactShownRef.current = false;
         setAgentActive(false);
         setAgentName(null);
         setOverflowMode(false);
+        setAgentRequestStatus(null);
     };
 
     return (
@@ -591,11 +630,15 @@ const ChatInterface = () => {
                                     }
 
                                     if (msg.role === 'assistant') {
-                                        const { text: cleanContent, showContact, showMoreInfo, showContactSales } = parseMessage(msg.content);
+                                        const { text: cleanContent, showContact, showMoreInfo, showContactSales, showBooking } = parseMessage(msg.content);
                                         // Only display the contact card for this message if it's the first one that triggered it
                                         // We detect "first" by checking if this message has the token AND no earlier message did
                                         const isFirstContactMsg = showContact &&
                                             !messages.slice(0, idx).some(m => m.content?.includes('##CONTACT_CARD##'));
+
+                                        const isFirstBookingMsg = showBooking &&
+                                            !messages.slice(0, idx).some(m => m.content?.includes('##BOOKING_FORM##'));
+
                                         const bubbles = splitIntoBubbles(cleanContent);
                                         return (
                                             <div key={idx} className="wm-group">
@@ -613,7 +656,30 @@ const ChatInterface = () => {
                                                         </div>
                                                     </div>
                                                 ))}
-                                                {isFirstContactMsg && <ContactCard />}
+
+                                                {/* Booking Form */}
+                                                {isFirstBookingMsg && (
+                                                    <BookingForm
+                                                        sessionId={sessionId}
+                                                        onBookingComplete={(data) => {
+                                                            // Optional: could send a success message to chat or agent
+                                                            console.log("Booking completed:", data);
+                                                        }}
+                                                    />
+                                                )}
+
+                                                {/* Talk to Agent button — FIRST PRIORITY */}
+                                                {(showMoreInfo || showContactSales) && !agentActive && agentRequestStatus !== 'pending' && (
+                                                    <button
+                                                        className="more-info-btn talk-to-agent-btn"
+                                                        onClick={requestAgent}
+                                                        disabled={agentRequestPending || isLoading}
+                                                        title="Talk to a live agent"
+                                                    >
+                                                        🎧 Talk to an Agent
+                                                    </button>
+                                                )}
+                                                {/* More info button */}
                                                 {showMoreInfo && !usedMoreInfoRef.current.has(idx) && (
                                                     <button
                                                         className="more-info-btn"
@@ -627,16 +693,8 @@ const ChatInterface = () => {
                                                         More info
                                                     </button>
                                                 )}
-                                                {showContactSales && (
-                                                    <button
-                                                        className="more-info-btn"
-                                                        onClick={() => sendMessageRef.current?.('connect me to your sales team')}
-                                                        disabled={isLoading}
-                                                        title="Contact sales team"
-                                                    >
-                                                        Further info: Contact Sales team
-                                                    </button>
-                                                )}
+                                                {/* Contact Card — SECOND PRIORITY (only if no agents available) */}
+                                                {isFirstContactMsg && <ContactCard />}
                                             </div>
                                         );
                                     }

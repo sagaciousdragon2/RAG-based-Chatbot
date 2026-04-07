@@ -42,3 +42,7 @@ chroma_db/
 backendpiper/
 piper/
 voices/
+ttscache/
+
+# Local Netlify folder
+.netlify

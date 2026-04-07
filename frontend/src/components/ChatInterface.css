@@ -529,6 +529,20 @@ body {
     transform: none;
 }
 
+.talk-to-agent-btn {
+    background: linear-gradient(135deg, #7c3aed, #a78bfa);
+    color: white;
+    border: none;
+    font-size: 0.82rem;
+    padding: 0.5rem 1rem;
+    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
+}
+
+.talk-to-agent-btn:hover {
+    filter: brightness(1.1);
+    box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
+}
+
 /* ─────────────────────────────────────────
    INPUT AREA
 ───────────────────────────────────────── */
