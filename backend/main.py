@@ -3,9 +3,12 @@ import csv
 import uuid
 import logging
 import bcrypt
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,10 +16,17 @@ from pymongo import MongoClient, ASCENDING, DESCENDING
 from dotenv import load_dotenv
 from rag_engine import rag_engine
 from tts_engine import tts_engine
+from auth import create_access_token, get_current_agent
 import os
 import json
 
 load_dotenv()
+
+# ── Email Config ──
+EMAIL_SENDER = os.getenv("EMAIL_SENDER", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.office365.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 
 # ── Logging ──
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -32,6 +42,7 @@ messages_collection = db["chat_messages"]
 agents_collection = db["agents"]
 chat_requests_collection = db["chat_requests"]
 bookings_collection = db["bookings"]
+settings_collection = db["settings"]
 
 # ── Agent Management ──
 # In-memory agent tracking (production would use Redis / DB)
@@ -228,6 +239,58 @@ class BookingRequest(BaseModel):
     user_phone: str | None = None
 
 
+# ── Helper: Send Booking Confirmation Email ──
+
+def send_booking_email(to_email: str, user_name: str, date: str, time: str):
+    """Send a booking confirmation email to the user via Gmail SMTP."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.warning("[Email] EMAIL_SENDER or EMAIL_PASSWORD not set — skipping email.")
+        return
+    try:
+        subject = "Your Demo Booking Confirmed – Walkout Tech"
+        body = f"""\
+Hi {user_name},
+
+Thank you for booking a demo with Walkout Tech! 🎉
+
+Here are your booking details:
+
+  📅  Date: {date}
+  ⏰  Time: {time}
+
+Our team will reach out to you shortly to confirm the final details.
+
+If you have any questions in the meantime, feel free to reply to this email or contact us at:
+  📧  sales@walkouttech.com
+  📱  WhatsApp: +91 9704 970 484
+
+We look forward to speaking with you!
+
+Best regards,
+The Walkout Tech Team
+https://walkouttech.com
+"""
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Walkout Tech <{EMAIL_SENDER}>"
+        msg["To"] = to_email
+        msg.attach(MIMEText(body, "plain"))
+
+        if EMAIL_PORT == 465:
+            with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT) as server:
+                server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+                server.sendmail(EMAIL_SENDER, to_email, msg.as_string())
+        else:
+            with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+                server.sendmail(EMAIL_SENDER, to_email, msg.as_string())
+        logger.info(f"[Email] Booking confirmation sent to {to_email}")
+    except Exception as e:
+        logger.error(f"[Email] Failed to send booking email to {to_email}: {e}")
+
+
 # ── Helper: Broadcast ──
 
 async def broadcast_to_session(session_id: str, data: dict):
@@ -260,6 +323,34 @@ async def broadcast_to_dashboard(data: dict):
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "version": "2.1.0"}
+
+
+@app.get("/api/settings")
+def get_settings():
+    """Get global chatbot settings (e.g., TTS preference)."""
+    try:
+        setting = settings_collection.find_one({"key": "global_config"})
+        if not setting:
+            return {"settings": {"tts_provider": "edge-tts"}}
+        return {"settings": setting.get("config", {"tts_provider": "edge-tts"})}
+    except Exception as e:
+        logger.error(f"[Settings] Fetch error: {e}")
+        return {"settings": {"tts_provider": "edge-tts"}}
+
+
+@app.post("/api/settings")
+def update_settings(config: dict, current_agent: dict = Depends(get_current_agent)):
+    """Update global chatbot settings (Agent only)."""
+    try:
+        settings_collection.update_one(
+            {"key": "global_config"},
+            {"$set": {"config": config, "updated_at": datetime.now(timezone.utc)}},
+            upsert=True
+        )
+        return {"message": "Settings updated successfully"}
+    except Exception as e:
+        logger.error(f"[Settings] Update error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/seed")
@@ -314,8 +405,17 @@ def agent_login(request: AgentLoginRequest):
             "email": agent["email"],
             "connected_at": datetime.now(timezone.utc).isoformat(),
         }
+        # Generate JWT access token
+        access_token = create_access_token(
+            data={"sub": agent["email"], "name": agent["name"]}
+        )
         logger.info(f"[Agent] Login: {agent['name']} ({agent['email']})")
-        return {"message": "Login successful", "name": agent["name"], "email": agent["email"]}
+        return {
+            "message": "Login successful", 
+            "name": agent["name"], 
+            "email": agent["email"],
+            "access_token": access_token
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -324,7 +424,7 @@ def agent_login(request: AgentLoginRequest):
 
 
 @app.post("/api/agent/logout")
-def agent_logout(email: str):
+def agent_logout(email: str, current_agent: dict = Depends(get_current_agent)):
     """Mark agent as offline."""
     if email in online_agents:
         del online_agents[email]
@@ -332,7 +432,7 @@ def agent_logout(email: str):
 
 
 @app.get("/api/agents/online")
-def get_online_agents():
+def get_online_agents(current_agent: dict = Depends(get_current_agent)):
     """Check how many agents are currently online."""
     return {
         "agents_online": len(online_agents) > 0,
@@ -347,8 +447,8 @@ def get_online_agents():
 async def request_chat(request: ChatRequestModel):
     """User requests to talk to a live agent."""
     try:
-        # Check if agents are online
-        if len(online_agents) == 0:
+        # Check if agents are online by checking active WebSocket connections
+        if len(dashboard_ws_connections) == 0:
             return {"status": "no_agents", "message": "No agents are currently online"}
         # Check if there's already a pending request for this session
         existing = chat_requests_collection.find_one({
@@ -381,7 +481,7 @@ async def request_chat(request: ChatRequestModel):
 
 
 @app.post("/api/agent/accept-chat")
-async def accept_chat(request: AcceptChatRequest):
+async def accept_chat(request: AcceptChatRequest, current_agent: dict = Depends(get_current_agent)):
     """Agent accepts a pending chat request."""
     try:
         chat_req = chat_requests_collection.find_one({
@@ -430,7 +530,7 @@ async def accept_chat(request: AcceptChatRequest):
 
 
 @app.get("/api/agent/pending-requests")
-def get_pending_requests():
+def get_pending_requests(current_agent: dict = Depends(get_current_agent)):
     """Get all pending chat requests for the dashboard."""
     try:
         requests = list(chat_requests_collection.find(
@@ -481,13 +581,23 @@ async def create_booking(request: BookingRequest):
         })
         
         logger.info(f"[Booking] New booking created: {booking_id} for {request.date} at {request.time}")
+
+        # Send confirmation email to user (non-blocking — errors are caught inside)
+        if request.user_email:
+            send_booking_email(
+                to_email=request.user_email,
+                user_name=request.user_name or "there",
+                date=request.date,
+                time=request.time,
+            )
+
         return {"status": "success", "booking_id": booking_id, "message": "Booking confirmed"}
     except Exception as e:
         logger.error(f"[Booking] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/bookings")
-def get_bookings():
+def get_bookings(current_agent: dict = Depends(get_current_agent)):
     """Get all consultation bookings."""
     try:
         bookings = list(bookings_collection.find({}, {"_id": 0}).sort("date", ASCENDING))
@@ -506,16 +616,21 @@ def get_bookings():
 async def start_chat(request: StartChatRequest):
     """Capture lead info and generate a chat session."""
     try:
-        # Check for duplicate email within last 24 hours (prevent spam)
-        existing = leads_collection.find_one({
-            "email": request.email,
-            "created_at": {"$gte": datetime(
-                datetime.now(timezone.utc).year,
-                datetime.now(timezone.utc).month,
-                datetime.now(timezone.utc).day,
-                tzinfo=timezone.utc
-            )}
-        })
+        # Check if lead already exists based on email
+        existing = leads_collection.find_one({"email": request.email})
+
+        if existing:
+            session_id = existing["session_id"]
+            logger.info(f"[Lead] Existing lead resumed: {request.name} ({request.email}) — session {session_id}")
+            # Update their name and phone if it has changed
+            leads_collection.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"name": request.name, "phone": request.phone}}
+            )
+            return StartChatResponse(
+                session_id=session_id,
+                message="Resumed chat session successfully"
+            )
 
         session_id = str(uuid.uuid4())
         lead = {
@@ -619,7 +734,7 @@ async def speak_endpoint(request: ChatRequest):
 # ── Leads Dashboard ──
 
 @app.get("/api/leads")
-def get_leads():
+def get_leads(current_agent: dict = Depends(get_current_agent)):
     """Fetch all leads for the sales dashboard with message counts."""
     try:
         leads = list(leads_collection.find(
@@ -653,7 +768,7 @@ def get_leads():
 
 
 @app.post("/api/lead/{session_id}/status")
-async def update_lead_status(session_id: str, update: LeadStatusUpdate):
+async def update_lead_status(session_id: str, update: LeadStatusUpdate, current_agent: dict = Depends(get_current_agent)):
     """Update lead status (new / assigned / closed)."""
     try:
         result = leads_collection.update_one(
@@ -678,7 +793,7 @@ async def update_lead_status(session_id: str, update: LeadStatusUpdate):
 
 
 @app.delete("/api/lead/{session_id}")
-async def delete_lead(session_id: str):
+async def delete_lead(session_id: str, current_agent: dict = Depends(get_current_agent)):
     """Delete a lead and all associated messages, requests, and bookings."""
     try:
         # 1. Delete messages
@@ -732,7 +847,7 @@ def get_chat_history(session_id: str):
 # ── Agent System ──
 
 @app.get("/api/agents/status")
-def get_agents_status():
+def get_agents_status(current_agent: dict = Depends(get_current_agent)):
     """Check if any agents are available."""
     available = [a for a in active_agents.values() if a["available"]]
     return {
@@ -744,7 +859,7 @@ def get_agents_status():
 
 
 @app.post("/api/agent/register")
-def register_agent(agent_name: str):
+def register_agent(agent_name: str, current_agent: dict = Depends(get_current_agent)):
     """Register a new agent as available."""
     agent_id = str(uuid.uuid4())[:8]
     active_agents[agent_id] = {
@@ -757,7 +872,7 @@ def register_agent(agent_name: str):
 
 
 @app.post("/api/agent/takeover")
-async def agent_takeover(request: AgentTakeoverRequest):
+async def agent_takeover(request: AgentTakeoverRequest, current_agent: dict = Depends(get_current_agent)):
     """Agent takes over a chat session from the bot."""
     try:
         lead = leads_collection.find_one({"session_id": request.session_id})
@@ -804,7 +919,7 @@ async def agent_takeover(request: AgentTakeoverRequest):
 
 
 @app.post("/api/agent/message")
-async def agent_send_message(request: AgentMessageRequest):
+async def agent_send_message(request: AgentMessageRequest, current_agent: dict = Depends(get_current_agent)):
     """Agent sends a message to the user."""
     try:
         # Store agent message
@@ -832,7 +947,7 @@ async def agent_send_message(request: AgentMessageRequest):
 
 
 @app.post("/api/agent/end-session")
-async def agent_end_session(request: EndSessionRequest):
+async def agent_end_session(request: EndSessionRequest, current_agent: dict = Depends(get_current_agent)):
     """Agent ends/releases a chat session back to bot mode."""
     try:
         lead = leads_collection.find_one({"session_id": request.session_id})
@@ -881,7 +996,7 @@ async def agent_end_session(request: EndSessionRequest):
 # ── Export Leads ──
 
 @app.get("/api/leads/export")
-def export_leads():
+def export_leads(current_agent: dict = Depends(get_current_agent)):
     """Export all leads as a downloadable CSV file."""
     try:
         leads = list(leads_collection.find(
@@ -918,7 +1033,7 @@ def export_leads():
 # ── Notification endpoint for new leads ──
 
 @app.get("/api/leads/new-count")
-def new_leads_count():
+def new_leads_count(current_agent: dict = Depends(get_current_agent)):
     """Get count of leads with status 'new' (for notification badge)."""
     count = leads_collection.count_documents({"status": "new"})
     return {"new_count": count}

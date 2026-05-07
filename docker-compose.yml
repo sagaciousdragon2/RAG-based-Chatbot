@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:latest
+    container_name: smartchat_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  backend:
+    build: 
+      context: ./backend
+    container_name: smartchat_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/
+      # Make sure EMAIL configs and GROQ_API_KEY from .env are picked up
+    env_file:
+      - ./backend/.env
+    volumes:
+      # Mount chroma_db to a persistent volume so embedded documents are saved
+      - chroma_data:/app/chroma_db
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Default API URL pointing to the local backend port 8000
+        # When deploying, you can pass a different URL
+        VITE_API_URL: http://localhost:8000
+    container_name: smartchat_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+  chroma_data:

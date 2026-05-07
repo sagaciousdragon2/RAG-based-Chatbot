@@ -44,11 +44,6 @@ const PreChatForm = ({ onStartChat, isLoading }) => {
 
     return (
         <div className="prechat-container">
-            {/* Animated background orbs */}
-            <div className="prechat-orb prechat-orb-1" />
-            <div className="prechat-orb prechat-orb-2" />
-            <div className="prechat-orb prechat-orb-3" />
-
             {/* Header area */}
             <div className="prechat-header">
                 <div className="prechat-logo-ring">

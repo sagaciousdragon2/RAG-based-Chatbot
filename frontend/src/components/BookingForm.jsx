@@ -4,7 +4,7 @@ import './BookingForm.css';
 
 const API_URL = import.meta.env.VITE_API_URL ?? '';
 
-const BookingForm = ({ sessionId, onBookingComplete }) => {
+const BookingForm = ({ sessionId, userInfo, onBookingComplete }) => {
     const [date, setDate] = useState('');
     const [time, setTime] = useState('');
     const [loading, setLoading] = useState(false);
@@ -26,6 +26,9 @@ const BookingForm = ({ sessionId, onBookingComplete }) => {
                 session_id: sessionId,
                 date: date,
                 time: time,
+                user_name: userInfo?.name ?? null,
+                user_email: userInfo?.email ?? null,
+                user_phone: userInfo?.phone ?? null,
             });
             setSuccess(true);
             if (onBookingComplete) {

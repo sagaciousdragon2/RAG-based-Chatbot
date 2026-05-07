@@ -23,7 +23,7 @@ const AgentLogin = ({ onLogin }) => {
         setLoading(true);
         try {
             const res = await axios.post(`${API_URL}/api/agent/login`, { email, password });
-            onLogin({ name: res.data.name, email: res.data.email });
+            onLogin({ name: res.data.name, email: res.data.email, token: res.data.access_token });
             navigate('/dashboard');
         } catch (err) {
             setError(err.response?.data?.detail || 'Login failed. Please try again.');

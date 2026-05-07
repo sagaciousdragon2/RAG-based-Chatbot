@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { Bell, Send, LogOut, MessageCircle, CheckCircle, Calendar, Archive, Tag } from 'lucide-react';
+import { Bell, Send, LogOut, MessageCircle, CheckCircle, Calendar, Archive, Tag, Menu, X } from 'lucide-react';
 import './SalesDashboard.css';
 
 const API_URL = import.meta.env.VITE_API_URL ?? '';
@@ -42,11 +42,14 @@ const SalesDashboard = ({ agentInfo, onLogout }) => {
     const [agentMessage, setAgentMessage] = useState('');
     const [pendingRequests, setPendingRequests] = useState([]);
     const [bookings, setBookings] = useState([]);
+    const [chatbotSettings, setChatbotSettings] = useState({ tts_provider: 'edge-tts' });
     const [newCount, setNewCount] = useState(0);
     const [wsConnected, setWsConnected] = useState(false);
     const [editingLabel, setEditingLabel] = useState(null);
     const [labelInput, setLabelInput] = useState('');
     const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, lead: null });
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const menuRef = useRef(null);
     const wsRef = useRef(null);
     const chatEndRef = useRef(null);
     const pollRef = useRef(null);
@@ -87,6 +90,51 @@ const SalesDashboard = ({ agentInfo, onLogout }) => {
             console.error('[Dashboard] Error fetching bookings:', err);
         }
     }, []);
+
+    const fetchSettings = useCallback(async () => {
+        try {
+            const res = await axios.get(`${API_URL}/api/settings`);
+            if (res.data && res.data.settings) {
+                setChatbotSettings(res.data.settings);
+            }
+        } catch (err) {
+            console.error('[Dashboard] Error fetching settings:', err);
+        }
+    }, []);
+
+    const updateSettings = async (newProvider) => {
+        const newSettings = { ...chatbotSettings, tts_provider: newProvider };
+        setChatbotSettings(newSettings);
+        try {
+            await axios.post(`${API_URL}/api/settings`, newSettings);
+        } catch (err) {
+            console.error('[Dashboard] Error updating settings:', err);
+        }
+    };
+
+    // Setup Axios Authorization Header & Interceptor
+    useEffect(() => {
+        if (agentInfo?.token) {
+            axios.defaults.headers.common['Authorization'] = `Bearer ${agentInfo.token}`;
+        }
+
+        const interceptor = axios.interceptors.response.use(
+            response => response,
+            error => {
+                if (error.response?.status === 401) {
+                    // Token expired or invalid
+                    console.warn('[Session] Token expired or invalid. Logging out.');
+                    delete axios.defaults.headers.common['Authorization'];
+                    onLogout();
+                }
+                return Promise.reject(error);
+            }
+        );
+
+        return () => {
+            axios.interceptors.response.eject(interceptor);
+        };
+    }, [agentInfo, onLogout]);
 
     // WebSocket connection
     useEffect(() => {
@@ -169,12 +217,18 @@ const SalesDashboard = ({ agentInfo, onLogout }) => {
         fetchNewCount();
         fetchPendingRequests();
         fetchBookings();
-        pollRef.current = setInterval(() => { fetchLeads(); fetchNewCount(); fetchPendingRequests(); fetchBookings(); }, 15000);
+        fetchSettings();
+        pollRef.current = setInterval(() => { fetchLeads(); fetchNewCount(); fetchPendingRequests(); fetchBookings(); fetchSettings(); }, 15000);
         return () => clearInterval(pollRef.current);
-    }, [fetchLeads, fetchNewCount, fetchPendingRequests, fetchBookings]);
+    }, [fetchLeads, fetchNewCount, fetchPendingRequests, fetchBookings, fetchSettings]);
 
     useEffect(() => {
-        const handleClickOutside = () => setContextMenu({ visible: false, x: 0, y: 0, lead: null });
+        const handleClickOutside = (e) => {
+            setContextMenu({ visible: false, x: 0, y: 0, lead: null });
+            if (menuRef.current && !menuRef.current.contains(e.target) && !e.target.closest('.sd-hamburger-btn')) {
+                setIsMenuOpen(false);
+            }
+        };
         window.addEventListener('click', handleClickOutside);
         return () => window.removeEventListener('click', handleClickOutside);
     }, []);
@@ -262,6 +316,7 @@ const SalesDashboard = ({ agentInfo, onLogout }) => {
         try {
             await axios.post(`${API_URL}/api/agent/logout?email=${encodeURIComponent(agentEmail)}`);
         } catch { }
+        delete axios.defaults.headers.common['Authorization'];
         onLogout();
     };
 
@@ -335,21 +390,7 @@ const SalesDashboard = ({ agentInfo, onLogout }) => {
                     </div>
                 )}
 
-                {/* Bookings Section */}
-                {bookings.length > 0 && (
-                    <div className="sd-pending-section" style={{ background: '#f0fdf4' }}>
-                        <h4 className="sd-section-label" style={{ color: '#166534' }}>📅 Upcoming Bookings</h4>
-                        {bookings.map((booking) => (
-                            <div key={booking.booking_id} className="sd-pending-item">
-                                <div className="sd-pending-info">
-                                    <span className="sd-pending-name">{booking.date} at {booking.time}</span>
-                                    <span className="sd-pending-email">Booked via Smartchat</span>
-                                </div>
-                                <Calendar size={16} color="#16a34a" />
-                            </div>
-                        ))}
-                    </div>
-                )}
+                {/* Bookings Section removed from here to Top Menu */}
 
                 <h4 className="sd-section-label">Active Chats</h4>
 
@@ -408,6 +449,62 @@ const SalesDashboard = ({ agentInfo, onLogout }) => {
                     Logout
                 </button>
             </aside>
+
+            {/* ── Top Right Expandable Menu ── */}
+            <div className="sd-top-right-container">
+                <button
+                    className="sd-hamburger-btn"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setIsMenuOpen(!isMenuOpen);
+                    }}
+                >
+                    {isMenuOpen ? <X size={24} /> : <Menu size={24} />}
+                </button>
+
+                {isMenuOpen && (
+                    <div className="sd-expandable-menu" ref={menuRef}>
+                        <div className="sd-menu-header">
+                            <h4>Menu</h4>
+                        </div>
+                        <div className="sd-menu-section">
+                            <h5>📅 Demo Bookings</h5>
+                            {bookings.length === 0 ? (
+                                <p className="sd-menu-empty">No upcoming bookings</p>
+                            ) : (
+                                <div className="sd-menu-list">
+                                    {bookings.map((booking) => (
+                                        <div key={booking.booking_id} className="sd-menu-item">
+                                            <div className="sd-menu-item-info">
+                                                <span className="sd-menu-item-primary">{booking.date} at {booking.time}</span>
+                                                <span className="sd-menu-item-secondary">{booking.user_name || 'User'} ({booking.user_email || 'No email'})</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        <div className="sd-menu-section">
+                            <h5>⚙️ Chatbot Settings</h5>
+                            <div className="sd-toggle-row">
+                                <span>Use Web Speech API (Local TTS)</span>
+                                <label className="sd-switch">
+                                    <input
+                                        type="checkbox"
+                                        checked={chatbotSettings?.tts_provider === 'web-api'}
+                                        onChange={(e) => updateSettings(e.target.checked ? 'web-api' : 'edge-tts')}
+                                    />
+                                    <span className="sd-slider round"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div className="sd-menu-section sd-menu-future">
+                            <h5> Future Features</h5>
+                            <p className="sd-menu-placeholder">More tools coming soon...</p>
+                        </div>
+                    </div>
+                )}
+            </div>
 
             {/* ── Right Chat Panel ── */}
             <main className="sd-chat-panel">

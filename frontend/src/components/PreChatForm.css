@@ -8,72 +8,16 @@
     flex-direction: column;
     height: 100%;
     padding: 1.5rem 1.25rem;
-    background: #ffffff;
-    /* Pure white background */
+    background:
+        radial-gradient(circle at 90% 10%, rgba(56, 189, 248, 0.12) 0%, transparent 50%),
+        radial-gradient(circle at 10% 80%, rgba(14, 165, 233, 0.10) 0%, transparent 45%),
+        radial-gradient(circle at 85% 60%, rgba(186, 230, 253, 0.10) 0%, transparent 40%),
+        #ffffff;
     overflow: hidden;
     gap: 0;
 }
 
-/* ── Light Animated Background Orbs ── */
-.prechat-orb {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(60px);
-    opacity: 0.15;
-    /* Subtler for light mode */
-    pointer-events: none;
-    animation: orbFloat 8s ease-in-out infinite;
-}
-
-.prechat-orb-1 {
-    width: 160px;
-    height: 160px;
-    background: #38bdf8;
-    /* Sky Blue */
-    top: -40px;
-    right: -30px;
-    animation-delay: 0s;
-}
-
-.prechat-orb-2 {
-    width: 120px;
-    height: 120px;
-    background: #0ea5e9;
-    /* Light Blue */
-    bottom: 60px;
-    left: -30px;
-    animation-delay: -3s;
-}
-
-.prechat-orb-3 {
-    width: 90px;
-    height: 90px;
-    background: #bae6fd;
-    /* Very Light Blue */
-    top: 50%;
-    right: -20px;
-    animation-delay: -5s;
-}
-
-@keyframes orbFloat {
-
-    0%,
-    100% {
-        transform: translate(0, 0) scale(1);
-    }
-
-    25% {
-        transform: translate(10px, -15px) scale(1.08);
-    }
-
-    50% {
-        transform: translate(-8px, 10px) scale(0.95);
-    }
-
-    75% {
-        transform: translate(5px, 8px) scale(1.04);
-    }
-}
+/* Orbs replaced with static gradients on container for Chrome compatibility */
 
 /* ── Header ── */
 .prechat-header {
@@ -220,13 +164,25 @@
     outline: none;
     color: #1e293b;
     font-size: 0.88rem;
-    padding: 0;
+    padding: 0 1px;
+    margin: 0;
     width: 100%;
     font-family: inherit;
+    line-height: normal;
+    min-height: 20px;
+    box-sizing: border-box;
 }
 
 .prechat-input::placeholder {
     color: #94a3b8;
+}
+
+/* Remove browser autofill background */
+.prechat-input:-webkit-autofill,
+.prechat-input:-webkit-autofill:hover,
+.prechat-input:-webkit-autofill:focus,
+.prechat-input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0px 1000px transparent inset !important;
 }
 
 .prechat-error {

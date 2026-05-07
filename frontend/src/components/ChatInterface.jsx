@@ -146,6 +146,7 @@ const parseMessage = (content) => {
 const ChatInterface = () => {
     const [open, setOpen] = useState(false);
     const [sessionId, setSessionId] = useState(null);
+    const [userInfo, setUserInfo] = useState(null);
     const [showPreChat, setShowPreChat] = useState(true);
     const [preChatLoading, setPreChatLoading] = useState(false);
     const [agentActive, setAgentActive] = useState(false);
@@ -164,6 +165,7 @@ const ChatInterface = () => {
     const [isListening, setIsListening] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [autoSpeak, setAutoSpeak] = useState(true);
+    const [globalSettings, setGlobalSettings] = useState({ tts_provider: 'edge-tts' });
 
     // Track if the contact card has already been shown this session (show only once)
     const contactShownRef = useRef(false);
@@ -179,6 +181,15 @@ const ChatInterface = () => {
     const wsRef = useRef(null);
 
     const ttsStopRef = useRef(false);
+
+    // ── Fetch Settings ──
+    useEffect(() => {
+        axios.get(`${API_URL}/api/settings`)
+            .then(res => {
+                if (res.data?.settings) setGlobalSettings(res.data.settings);
+            })
+            .catch(err => console.error('[Settings] Fetch error:', err));
+    }, []);
 
     // ── WebSocket Connection ──
     useEffect(() => {
@@ -244,13 +255,23 @@ const ChatInterface = () => {
         setPreChatLoading(true);
         try {
             const res = await axios.post(`${API_URL}/api/start-chat`, formData);
-            setSessionId(res.data.session_id);
+            const returnedSessionId = res.data.session_id;
+            setSessionId(returnedSessionId);
+            setUserInfo(formData);
             setShowPreChat(false);
-            // Personalize greeting
-            const firstName = formData.name.split(' ')[0];
-            setMessages([
-                { role: 'assistant', content: `Hi **${firstName}**! 👋 I'm **Smartchat**, your Walkout Tech assistant.\n\nHow can I help you today?` }
-            ]);
+
+            // Fetch any existing chat history for this session
+            const historyRes = await axios.get(`${API_URL}/api/chat-history/${returnedSessionId}`);
+            if (historyRes.data.messages && historyRes.data.messages.length > 0) {
+                setMessages(historyRes.data.messages);
+                // Automatically scroll into view and prevent initial TTS logic
+            } else {
+                // Personalize greeting for a completely new chat
+                const firstName = formData.name.split(' ')[0];
+                setMessages([
+                    { role: 'assistant', content: `Hi **${firstName}**! 👋 I'm **Smartchat**, your Walkout Tech assistant.\n\nHow can I help you today?` }
+                ]);
+            }
         } catch (err) {
             console.error('[PreChat] Error:', err);
             alert('Failed to start chat. Please try again.');
@@ -291,6 +312,29 @@ const ChatInterface = () => {
         }
         setIsSpeaking(true);
 
+        if (globalSettings.tts_provider === 'web-api') {
+            if (window.speechSynthesis.speaking) {
+                window.speechSynthesis.cancel();
+            }
+            try {
+                for (let i = 0; i < chunks.length; i++) {
+                    if (ttsStopRef.current) break;
+                    const currentText = stripMarkdown(chunks[i]);
+                    if (!currentText.trim()) continue;
+
+                    await new Promise((resolve) => {
+                        const utterance = new SpeechSynthesisUtterance(currentText);
+                        utterance.onend = resolve;
+                        utterance.onerror = resolve;
+                        window.speechSynthesis.speak(utterance);
+                    });
+                }
+            } finally {
+                setIsSpeaking(false);
+            }
+            return;
+        }
+
         try {
             const firstText = stripMarkdown(chunks[0]);
             if (!firstText.trim()) return;
@@ -323,7 +367,7 @@ const ChatInterface = () => {
             setIsSpeaking(false);
             audioRef.current = null;
         }
-    }, [fetchAudioBlob, playBlob]);
+    }, [fetchAudioBlob, playBlob, globalSettings.tts_provider]);
 
     // Kept for backward compat; wraps single text as one chunk
     const speakText = useCallback((text) => {
@@ -336,6 +380,9 @@ const ChatInterface = () => {
         if (audioRef.current) {
             audioRef.current.pause();
             audioRef.current = null;
+        }
+        if (window.speechSynthesis) {
+            window.speechSynthesis.cancel();
         }
         setIsSpeaking(false);
     }, []);
@@ -616,15 +663,22 @@ const ChatInterface = () => {
 
                                     // Agent messages
                                     if (msg.role === 'agent') {
+                                        const { text: cleanContent, showContact } = parseMessage(msg.content);
+                                        const isFirstContactMsg = showContact &&
+                                            !messages.slice(0, idx).some(m => m.content?.includes('##CONTACT_CARD##'));
+
                                         return (
-                                            <div key={idx} className="wm agent-msg">
-                                                <div className="wm-avatar agent-avatar">
-                                                    <Headphones size={12} />
+                                            <div key={idx} className="wm-group">
+                                                <div className="wm agent-msg">
+                                                    <div className="wm-avatar agent-avatar">
+                                                        <Headphones size={12} />
+                                                    </div>
+                                                    <div className="wm-bubble agent-bubble">
+                                                        <span className="agent-msg-name">{msg.agent_name || 'Agent'}</span>
+                                                        <p>{cleanContent}</p>
+                                                    </div>
                                                 </div>
-                                                <div className="wm-bubble agent-bubble">
-                                                    <span className="agent-msg-name">{msg.agent_name || 'Agent'}</span>
-                                                    <p>{msg.content}</p>
-                                                </div>
+                                                {isFirstContactMsg && <ContactCard />}
                                             </div>
                                         );
                                     }
@@ -661,8 +715,8 @@ const ChatInterface = () => {
                                                 {isFirstBookingMsg && (
                                                     <BookingForm
                                                         sessionId={sessionId}
+                                                        userInfo={userInfo}
                                                         onBookingComplete={(data) => {
-                                                            // Optional: could send a success message to chat or agent
                                                             console.log("Booking completed:", data);
                                                         }}
                                                     />
